@@ -1,84 +1,105 @@
-# vincent-deck — build brief
+# Vincent Deck
 
-Design status: **confirmed by the user on 2026-10-03**, after the 27-decision
-design interview. The numbered specifications are the product contract;
-`RESEARCH.md` supplies evidence and provisional internal design. Engineering
-limits are delegated for measurement and documentation within that contract.
+A native [OpenDeck](https://github.com/nekename/OpenDeck) plugin for an Elgato
+Stream Deck + on an Omarchy/Hyprland desktop. It draws CRT-style keys and dial
+panels, follows the desktop palette, shows live system state, and launches desktop
+controls asynchronously.
 
-This folder is a **specification, not an implementation**. It describes a single
-OpenDeck plugin ("vincent-deck") that owns every key and dial of one Stream Deck,
-draws all of their pictures itself, keeps them in sync with the desktop theme and
-with live system state, and runs the actions when they are pressed or turned.
+Implemented in Rust 2024 with OpenAction 2.7.0, Tokio, tiny-skia, and fontdue.
+The plugin is deployed on the author's desktop; basic operation and appearance
+have been approved. Full hardware acceptance and performance measurements remain
+open. See [implementation notes](NOTES.md) for verification and known limitations.
 
-The implementation uses **Rust and OpenAction**, packaged as a program OpenDeck
-can launch plus a manifest. Rendering libraries remain provisional until one key
-and one panel demonstrate acceptable visual fidelity. Internal structure remains
-an implementation choice. See `docs/adr/0001-rust-and-openaction.md`.
+## Controls
 
-Code snippets in these documents are illustrative (message shapes, commands,
-file layouts). They are not source to copy.
+All actions can be rearranged or duplicated within their supported controller
+type. Keys act on key-down; dial press and panel tap perform the same action.
 
-## Why this exists
+| Key action | Press | Live display |
+|---|---|---|
+| Terminal | Open terminal | `TTY` |
+| Browser | Open browser | `NET` |
+| Screenshot | Capture screenshot | `SNAP` |
+| Record | Toggle screen recording | Elapsed time, pending, or stale |
+| Agent | Toggle the default agent scratchpad, matching Mod+grave | `AGENT` |
+| Clipboard | Open clipboard history | `CLIP` |
+| Night | Toggle Night Light | Confirmed on/off, pending, or stale |
+| Lock | Lock the session | Confirmed locked, pending, or stale |
 
-Today the deck is driven by two stock plugins (a "run command" plugin and a
-PipeWire volume plugin) and a generator script that bakes labels into PNG files.
-That setup cannot:
+| Dial action | Rotate | Press / panel tap | Live display |
+|---|---|---|---|
+| Volume | Adjust output by 1% per tick | Toggle output mute | Percentage, bar, mute/stale status |
+| Mic | Adjust input by 1% per tick | Toggle input mute | Percentage, bar, mute/stale status |
+| Workspace | Next/previous workspace | Open Omarchy menu | Number, occupancy pips, active window |
+| Theme | Next/previous theme | Next wallpaper | Theme name, palette swatches, list position |
 
-- follow the desktop theme without regenerating files and restarting OpenDeck,
-- show live state (current workspace, theme name, volume, mic mute, night light,
-  recording),
-- recolour the volume/mic dial icons (they are embedded copies owned by another
-  plugin).
+Audio adjustments clamp to 0–100%; observation and mute do not change externally
+set above-cap values. Workspace rotation uses the sign of an event, retaining
+only the latest pending direction. Theme rotation drops repeats while busy.
+Night and Record each share a busy gate across their duplicate instances.
 
-One plugin that owns everything removes all of those limits.
+## Requirements
 
-## Goals (in priority order)
+- Linux x86-64, OpenDeck, Omarchy, and Hyprland in a working Wayland session.
+- Rust/Cargo with Rust 2024 support and Python 3 for install/migration tooling.
+- Font: `/usr/share/fonts/TTF/TerminessNerdFontMono-Bold.ttf`.
+- Desktop commands: `wpctl`, `pactl`, `hyprctl`, `pgrep`, `ps`, and the Omarchy
+  launch, capture, clipboard, nightlight, lock, theme, and menu commands.
+- Existing `~/.local/bin/deck-workspace` and `deck-theme-cycle` helpers. This
+  repository does not install those helpers.
 
-1. **Parity**: preserve existing commands and normal key/dial behavior, with
-   agreed refinements in doc 03: 100 % audio ceilings, consistent panel taps,
-   and busy-input handling. Observation never alters externally set audio values.
-2. **Theme-following**: when the Omarchy theme changes (from anywhere: the dial,
-   the Omarchy menu, a CLI call), every icon and panel is redrawn in the new
-   theme's colours normally within about a second after Omarchy finishes applying
-   the theme, with no OpenDeck restart. Transient palette-read failures may delay
-   convergence while the plugin retries.
-3. **Live panels**: the four touch-strip dials show current state instead of
-   instructions (see `03-actions-and-behavior.md`).
-4. **Live keys**: Night Light and Record keys reflect whether they are on.
-5. **Robustness**: it recovers from backend failures and transient connections
-   while alive, survives OpenDeck restarts, and handles missing tools and
-   monochrome themes. A plugin-process crash may require an OpenDeck restart.
+Migration tooling targets device `sd-EL31L1A08599`, eight keys, four dials, and its
+`Default` profile. Other device IDs require adapting `scripts/manage.py`.
 
-## Agreed scope and appearance
+## Build and install
 
-- Key actions support keys; dial actions support dials. Rearrangement and
-  duplicate instances are supported within each controller type.
-- Preserve the existing CRT appearance perceptually, with exact dimensions and
-  layout constants; minor rasterization differences are acceptable. Final visual
-  acceptance is on the physical device.
-- Monochrome themes remain monochrome. State must be recognizable through text,
-  glyphs, and shape without injecting a colorful fallback palette.
-- Unavailable state is visibly marked stale; it is never presented as confirmed
-  off, idle, or muted. Last-known values may remain visibly dimmed and qualified.
-- Full rollback remains available after cleanup through a complete legacy backup.
+Run from the repository root:
 
-## Non-goals
+```sh
+python scripts/manage.py install
+```
 
-- No settings UI / property inspector (the actions have no per-instance settings).
-- No support for other devices, other OSes, or other desktops.
-- Do not modify OpenDeck itself or other plugins' files.
+This runs `cargo build --release`, renders sample icons, generates the manifest,
+backs up an existing installed bundle, and installs to
+`~/.config/opendeck/plugins/dev.vincent.deck.sdPlugin/`.
+The generated bundle is also available under `dist/`.
 
-## Documents
+Restart OpenDeck to load the installed binary. Close OpenDeck and wait for its
+plugin processes to exit, then launch it again:
 
-| File | What it covers |
-|---|---|
-| `01-environment.md` | The machine, the device, paths, commands that exist, constraints |
-| `02-opendeck-protocol.md` | How a plugin talks to OpenDeck (verified facts + pitfalls) |
-| `03-actions-and-behavior.md` | Every action: what it shows, what it does |
-| `04-visual-spec.md` | Pixel-level look of keys and panels, palette, fonts |
-| `05-live-state.md` | Where each piece of live state comes from, refresh rules |
-| `06-install-migrate-verify.md` | Manifest, install, profile migration, rollback, acceptance tests, cleanup |
-| `RESEARCH.md` | Supporting evidence and proposed implementation; numbered specs take precedence |
-| `GLOSSARY.md` | Agreed product terminology |
+```sh
+opendeck
+```
 
-Read them in that order.
+The executable normally receives its connection arguments from OpenDeck; it is
+not a standalone desktop application. Build alone with `cargo build --release`.
+
+For test-profile creation, migration, and rollback, see the
+[installation guide](docs/install.md).
+
+## Development checks
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+python -m unittest discover -s tests -p 'test_*.py'
+```
+
+Rust tests require the font above. The host harness runs the real plugin against
+a local WebSocket server and isolated desktop-command fixtures. Python tests
+exercise migration and rollback in temporary homes with process calls mocked.
+
+Generated binaries, images, Python caches, and IDE state are ignored by Git.
+
+## Documentation
+
+- [Install, migrate, and roll back](docs/install.md)
+- [Architecture, runtime limits, verification, and known limitations](NOTES.md)
+- [Product terminology](GLOSSARY.md)
+- [Rust/OpenAction decision](docs/adr/0001-rust-and-openaction.md)
+- [Historical research and design proposals](RESEARCH.md)
+
+The original numbered design briefs are no longer present in this checkout.
+Historical references to them in the research and source comments describe the
+original design context; the guides above document the current implementation.
