@@ -58,7 +58,7 @@ def manifest():
                                   'TriggerDescription': {'Rotate': rotate, 'Push': push, 'Touch': touch}}
         actions.append(action)
     return dict(Name='Vincent Deck', Description='Theme-following CRT controls for Omarchy',
-                Author='Vincent', Version='0.2.3', Category='Vincent Deck', Icon='icons/terminal',
+                Author='Vincent', Version='0.2.4', Category='Vincent Deck', Icon='icons/terminal',
                 CodePathLin='x86_64-unknown-linux-gnu/bin/vincent-deck',
                 CodePaths={'x86_64-unknown-linux-gnu': 'x86_64-unknown-linux-gnu/bin/vincent-deck'},
                 OS=[{'Platform': 'linux'}], Actions=actions)

@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
         if let Err(error) = openaction::run(args.clone()).await {
             eprintln!("host connection: {error}");
         }
+        app.host_connected(false).await;
         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         delay = (delay * 2).min(10);
     }

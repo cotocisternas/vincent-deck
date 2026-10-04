@@ -43,6 +43,7 @@ rollback, and hardware acceptance checks.
 | `src/main.rs` | Sample rendering and the host reconnect loop |
 | `src/actions.rs` | OpenAction registration and controller event routing |
 | `src/app.rs` | Shared state, polling, rendering, input queues/gates, event streams |
+| `src/display.rs` | Latest-only images, fair writer, stall status, bounded expiring host commands |
 | `src/audio/mod.rs` | Native audio thread, command channel, latest-state notifications, reconnect |
 | `src/audio/native.c` | Small WirePlumber 0.5 library bridge, mixer/default-node APIs |
 | `src/state.rs` | Desktop queries, parsing, and snapshot accessors |
@@ -54,7 +55,7 @@ rollback, and hardware acceptance checks.
 
 The application refactor separates polling and theme checks, refresh operations,
 render passes, audio batches, busy gates, command execution, and event watchers.
-`Surface` owns visible per-context flags and send deduplication; `RenderCache`
+`Surface` owns visible per-context flags and a generation-tagged delivery token; `RenderCache`
 owns the bounded image cache. Snapshot accessors centralize field selection.
 Content is still a common struct containing fields for all actions; action policy
 dispatch remains in several matches.
@@ -78,7 +79,7 @@ distinguished by solid accent and dashed foreground traces even in monochrome.
 Stats profile, assigning only its copied dial slots. It never edits Default and
 rejects overwriting existing stats profiles. `--name performance` names the copied
 profile performance. Default filename casing is detected for profile commands and
-legacy archives. The manifest version is now `0.2.3`.
+legacy archives. The manifest version is now `0.2.4`.
 
 CPU's footer independently tracks the active power profile every two seconds.
 Rotation reads the available profiles and selects one signed step with
@@ -140,8 +141,18 @@ Device strings are bounded to 255 bytes and control characters are sanitized.
 - Cache: at most 64 rendered data URIs; per-context last-sent image is bounded by
   visible instances. Window/theme input strings are bounded. Recording cache inputs
   contain formatted visible elapsed time only.
-- Panel send limit: 100 ms minimum per context (at most 10 Hz); fixed-cadence
-  refresh prevents sustained event streams starving display updates.
+- Display send limit: 100 ms minimum per context (at most 10 Hz). Rendering copies
+  descriptors under short-lived app locks and never awaits socket I/O. One writer
+  owns one in-flight send; each visible generation retains at most one newest
+  pending image and one last-sent image. A fair dirty queue prevents graph starvation.
+  After two seconds a send is marked stalled but its future remains intact; no
+  replacement writes start until it completes. Only ending that SDK session cancels
+  it. Kernel/WebSocket buffers may still contain older accepted images.
+- Host profile commands: at most eight queued, prioritized between image writes,
+  expire after two seconds before starting. Stall/offline rejects new commands;
+  a stalled in-flight command reports uncertain delivery and is never replayed.
+  Surface generation changes and disconnects discard queued commands. Local state
+  and delivered events remain responsive; permanently stuck hosts need restarting.
 - Audio: native notifications; tick batches are summed behind one worker per source.
   The native command queue is bounded to 32 requests. Startup and write synchronization
   have two-second deadlines; failed connections retry after 500 ms. Absolute percentage
@@ -160,6 +171,20 @@ Device strings are bounded to 255 bytes and control characters are sanitized.
   unverified host `showAlert` support.
 
 ## Verification status
+
+Display backpressure verification (0.2.4): six deterministic scheduler tests cover
+latest replacement, fairness, same-context generations, reverting to the last
+image during a write, command capacity/expiration/uncertain delivery, transport
+failure, and session cancellation without command replay. The real-binary harness
+fills a non-reading host's TCP buffers until `display stalled` is observed,
+verifies lifecycle removal and a local button command still complete, resumes
+reading and checks current audio state, then closes a second stalled connection
+and verifies reconnection/redraw. Strict Clippy and Rust/Python suites pass.
+Installed release matches the built executable. Live profile switching passed in
+both directions after host startup; an immediate post-restart attempt ran before
+registration completed and failed. Socket queues were empty after verification.
+These checks establish plugin resilience; the original OpenDeck freeze's root
+cause and physical-button acceptance under that freeze remain unconfirmed.
 
 Passed: Rust typecheck, strict Clippy, rendered-output tests (dimensions, opacity,
 strict grayscale, stale/failure distinctions, recording duration formatting),

@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod app;
 pub mod audio;
+pub mod display;
 pub mod metrics;
 pub mod power;
 pub mod process;

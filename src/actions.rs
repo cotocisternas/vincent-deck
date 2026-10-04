@@ -108,6 +108,7 @@ struct Global(Arc<App>);
 #[openaction::async_trait]
 impl openaction::global_events::GlobalEventHandler for Global {
     async fn plugin_ready(&self) -> OpenActionResult<()> {
+        self.0.host_connected(true).await;
         self.0.reconnect().await;
         Ok(())
     }

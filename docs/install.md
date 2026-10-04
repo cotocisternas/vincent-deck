@@ -99,7 +99,7 @@ profiles are not overwritten, including lowercase filenames.
 
 These actions are also available individually in OpenDeck's action list. Their
 UUIDs are `dev.vincent.deck.cpu`, `.memory`, `.disk`, and `.network`; the twelve
-existing UUIDs remain available. The manifest version is `0.2.3`.
+existing UUIDs remain available. The manifest version is `0.2.4`.
 
 The display warms up for one sampling interval, then updates once per second:
 

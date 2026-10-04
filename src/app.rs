@@ -26,15 +26,16 @@ pub struct App {
     audio_pending: Mutex<HashMap<Action, AudioPending>>,
     power_lock: Mutex<()>,
     notify: Notify,
+    display: Arc<crate::display::Display>,
 }
+#[derive(Clone)]
 struct Surface {
     action: Action,
     instance: Arc<openaction::Instance>,
-    last: String,
-    sent: Instant,
+    delivery: crate::display::Surface,
     failed_until: Option<Instant>,
 }
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Gate {
     busy: bool,
     pending: Option<(i16, String)>,
@@ -59,6 +60,7 @@ impl App {
             audio_pending: Mutex::new(HashMap::new()),
             power_lock: Mutex::new(()),
             notify: Notify::new(),
+            display: crate::display::Display::new(),
         })
     }
 
@@ -67,13 +69,15 @@ impl App {
             return;
         }
         if let Some(instance) = openaction::get_instance(instance.instance_id.clone()).await {
+            let delivery = self
+                .display
+                .register(instance.instance_id.clone(), action.panel());
             self.surfaces.lock().await.insert(
                 instance.instance_id.clone(),
                 Surface {
                     action,
                     instance,
-                    last: String::new(),
-                    sent: Instant::now() - Duration::from_secs(1),
+                    delivery,
                     failed_until: None,
                 },
             );
@@ -81,20 +85,29 @@ impl App {
         }
     }
     pub async fn disappear(&self, id: &str) {
-        self.surfaces.lock().await.remove(id);
+        if let Some(surface) = self.surfaces.lock().await.remove(id) {
+            self.display.remove(&surface.delivery);
+        }
     }
     pub async fn reconnect(&self) {
-        for surface in self.surfaces.lock().await.values_mut() {
-            surface.last.clear();
-        }
+        self.display.redraw();
+        self.notify.notify_one();
+    }
+
+    pub async fn host_connected(&self, connected: bool) {
+        self.display.connected(connected);
         self.notify.notify_one();
     }
 
     pub async fn disconnect_device(&self, device: &str) {
-        self.surfaces
-            .lock()
-            .await
-            .retain(|_, surface| surface.instance.device_id != device);
+        self.surfaces.lock().await.retain(|_, surface| {
+            if surface.instance.device_id == device {
+                self.display.remove(&surface.delivery);
+                false
+            } else {
+                true
+            }
+        });
     }
     async fn failure(&self, id: &str, error: impl std::fmt::Display) {
         eprintln!("command failure context={id}: {error}");
@@ -105,6 +118,7 @@ impl App {
     }
 
     pub fn start(self: &Arc<Self>) {
+        self.display.start();
         self.spawn(|app| async move { app.render_loop().await });
         for action in POLLED {
             self.spawn(move |app| async move { app.poll_loop(action).await });
@@ -281,20 +295,20 @@ impl App {
         }
     }
 
-    /// Renders and pushes every surface once; returns whether another pass is needed.
+    /// Copies descriptors under short-lived locks; publication never awaits socket I/O.
     async fn render_pass(&self, cache: &mut RenderCache) -> bool {
         let snapshot = self.snapshot.lock().await.clone();
-        let gates = self.gates.lock().await;
-        let mut surfaces = self.surfaces.lock().await;
+        let gates = self.gates.lock().await.clone();
+        let surfaces: Vec<_> = self.surfaces.lock().await.values().cloned().collect();
         let mut pending = false;
-        for surface in surfaces.values_mut() {
+        for surface in surfaces {
             let content = surface.content(&snapshot, &gates);
             pending |= content.failed;
             let Some(uri) = cache.uri(&self.renderer, surface.action, &snapshot.palette, content)
             else {
                 continue;
             };
-            pending |= surface.push(uri).await;
+            self.display.publish(&surface.delivery, uri);
         }
         pending
     }
@@ -337,12 +351,38 @@ impl App {
                 return;
             }
         }
-        if let Err(error) = openaction::send_arbitrary_json(serde_json::json!({
-            "event": "switchProfile", "device": instance.device_id, "profile": target,
-        }))
-        .await
-        {
-            self.failure(&instance.instance_id, error).await;
+        let surface = self
+            .surfaces
+            .lock()
+            .await
+            .get(&instance.instance_id)
+            .map(|s| s.delivery.clone());
+        let Some(surface) = surface else { return };
+        let request = self.display.command(
+            &surface,
+            serde_json::json!({
+                "event": "switchProfile", "device": instance.device_id, "profile": target,
+            }),
+        );
+        match request {
+            Ok(reply) => {
+                let id = instance.instance_id.clone();
+                self.spawn(move |app| async move {
+                    let error = match reply.await {
+                        Ok(Ok(())) => return,
+                        Ok(Err(error)) => error,
+                        Err(_) => "host command discarded: surface or connection changed".into(),
+                    };
+                    eprintln!("command failure context={id}: {error}");
+                    if let Some(current) = app.surfaces.lock().await.get_mut(&id)
+                        && current.delivery == surface
+                    {
+                        current.failed_until = Some(Instant::now() + Duration::from_secs(2));
+                    }
+                    app.notify.notify_one();
+                });
+            }
+            Err(error) => self.failure(&instance.instance_id, error).await,
         }
     }
 
@@ -665,35 +705,6 @@ impl Surface {
             && gates.get(&self.action).is_some_and(|g| g.busy);
         content.failed = self.failed_until.is_some_and(|t| t > Instant::now());
         content
-    }
-
-    /// Sends the image if it changed; returns whether the surface needs another pass.
-    async fn push(&mut self, uri: String) -> bool {
-        if uri == self.last {
-            return false;
-        }
-        let panel = self.action.panel();
-        if panel && self.sent.elapsed() < Duration::from_millis(100) {
-            return true;
-        }
-        let result = if panel {
-            self.instance
-                .set_feedback(&serde_json::json!({"panel": uri}))
-                .await
-        } else {
-            self.instance.set_image(Some(&uri), Some(0)).await
-        };
-        match result {
-            Ok(()) => {
-                self.last = uri;
-                self.sent = Instant::now();
-                false
-            }
-            Err(error) => {
-                eprintln!("display: {error}");
-                true
-            }
-        }
     }
 }
 

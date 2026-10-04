@@ -140,6 +140,16 @@ For test-profile creation, migration, and rollback, see the
 
 ## Development checks
 
+Display delivery keeps one newest pending image per visible instance and one
+in-flight write. A write taking more than two seconds is logged as stalled; it
+continues in a dedicated writer while state updates and delivered input events
+remain responsive. When the host resumes reading, pending images converge to
+current state. Profile-switch requests are bounded, expire after two seconds
+before sending, and are rejected while stalled. A permanently non-reading host
+may still require an OpenDeck restart. This is backpressure protection, not a
+confirmed fix for the observed host freeze; already-buffered frames cannot be
+replaced.
+
 ```sh
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -152,6 +162,8 @@ a local WebSocket server, isolated desktop-command fixtures, and a private
 PipeWire daemon. Native audio tests also use `wpctl` and `pw-metadata` as independent
 test observers/controllers; neither is used by the plugin at runtime. Python tests
 exercise migration and rollback in temporary homes with process calls mocked.
+The harness deliberately stops reading until an actual blocked write is observed,
+then verifies input/lifecycle responsiveness and recovery to the newest audio state.
 
 Generated binaries, images, Python caches, and IDE state are ignored by Git.
 
