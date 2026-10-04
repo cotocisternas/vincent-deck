@@ -73,10 +73,14 @@ pub enum Action {
     Mic,
     Workspace,
     Theme,
+    Cpu,
+    Memory,
+    Disk,
+    Network,
 }
 
 impl Action {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 16] = [
         Self::Terminal,
         Self::Browser,
         Self::Screenshot,
@@ -89,6 +93,10 @@ impl Action {
         Self::Mic,
         Self::Workspace,
         Self::Theme,
+        Self::Cpu,
+        Self::Memory,
+        Self::Disk,
+        Self::Network,
     ];
 
     pub fn name(self) -> &'static str {
@@ -105,13 +113,27 @@ impl Action {
             Self::Mic => "mic",
             Self::Workspace => "workspace",
             Self::Theme => "theme",
+            Self::Cpu => "cpu",
+            Self::Memory => "memory",
+            Self::Disk => "disk",
+            Self::Network => "network",
         }
     }
     pub fn panel(self) -> bool {
         matches!(
             self,
-            Self::Volume | Self::Mic | Self::Workspace | Self::Theme
+            Self::Volume
+                | Self::Mic
+                | Self::Workspace
+                | Self::Theme
+                | Self::Cpu
+                | Self::Memory
+                | Self::Disk
+                | Self::Network
         )
+    }
+    pub fn stats(self) -> bool {
+        matches!(self, Self::Cpu | Self::Memory | Self::Disk | Self::Network)
     }
     fn style(self) -> (&'static str, &'static str, char, u8) {
         match self {
@@ -127,6 +149,10 @@ impl Action {
             Self::Theme => ("THEME", "purple", '\u{f1fc}', 9),
             Self::Volume => ("VOL", "blue", '\u{f028}', 10),
             Self::Mic => ("MIC", "green", '\u{f130}', 11),
+            Self::Cpu => ("CPU", "orange", '\u{f2db}', 12),
+            Self::Memory => ("MEM", "purple", '\u{f2db}', 13),
+            Self::Disk => ("DISK", "yellow", '\u{f0a0}', 14),
+            Self::Network => ("NET", "cyan", '\u{f0ac}', 15),
         }
     }
 }
@@ -147,6 +173,9 @@ pub struct Content {
     pub window: String,
     pub theme: String,
     pub position: String,
+    pub graph: Option<crate::metrics::Graph>,
+    pub power_profile: String,
+    pub power_stale: bool,
 }
 
 pub fn elapsed_label(seconds: u64) -> String {
@@ -358,6 +387,8 @@ impl Renderer {
             if content.pending {
                 rect(&mut canvas, 118., 11., 12., 12., muted);
             }
+        } else if action.stats() {
+            self.stats_panel(&mut canvas, action, palette, content);
         } else {
             if content.muted {
                 glyph = if action == Action::Mic {
@@ -541,6 +572,127 @@ impl Renderer {
             );
         }
         Ok(canvas.encode_png()?)
+    }
+
+    fn stats_panel(
+        &self,
+        canvas: &mut Pixmap,
+        action: Action,
+        palette: &Palette,
+        content: &Content,
+    ) {
+        let (label, accent, _, index) = action.style();
+        let color = if content.stale {
+            palette.color("muted")
+        } else {
+            palette.color(accent)
+        };
+        let secondary = palette.color("fg");
+        let muted = palette.color("muted");
+        self.text(canvas, label, 20., 12., 7., color);
+        let tag = format!("0x{index:02X}");
+        self.text(canvas, &tag, 12., 190. - self.width(&tag, 12.), 7., muted);
+        let Some(graph) = &content.graph else {
+            self.text(canvas, "WARMING UP", 14., 12., 35., muted);
+            self.text(
+                canvas,
+                if content.failed {
+                    "ERROR"
+                } else if content.stale {
+                    "STALE"
+                } else {
+                    "WAIT"
+                },
+                14.,
+                72.,
+                78.,
+                muted,
+            );
+            return;
+        };
+        let summary = self.fit(&graph.value, 18., 176.);
+        self.text(canvas, &summary, 18., 12., 28., color);
+        // Full-width plot, with space for status and the left-column theme badge.
+        for y in [51., 62., 73.] {
+            rect(canvas, 12., y, 176., 1., palette.color("darker_bg"));
+        }
+        draw_trace(canvas, &graph.primary, graph.scale, color, false);
+        if graph.paired {
+            draw_trace(
+                canvas,
+                &graph.secondary,
+                graph.scale,
+                if content.stale { muted } else { secondary },
+                true,
+            );
+        }
+        let detail = if content.failed {
+            "ERROR"
+        } else if content.stale {
+            "STALE"
+        } else if action == Action::Cpu {
+            if content.power_stale || content.power_profile.is_empty() {
+                "POWER?"
+            } else {
+                &content.power_profile
+            }
+        } else {
+            &graph.detail
+        };
+        // The plot itself carries both series; labels identify R/W or D/U.
+        let size = if action == Action::Cpu { 14. } else { 12. };
+        self.text(
+            canvas,
+            &self.fit(detail, size, 176.),
+            size,
+            12.,
+            if action == Action::Cpu { 78. } else { 79. },
+            muted,
+        );
+        if content.theme_stale {
+            rect(canvas, 12., 79., 176., 15., palette.color("darker_bg"));
+            self.text(canvas, "THEME?", 12., 13., 80., muted);
+            self.text(
+                canvas,
+                if content.stale { "STALE" } else { "LIVE" },
+                12.,
+                72.,
+                80.,
+                muted,
+            );
+        }
+    }
+}
+
+fn draw_trace(
+    canvas: &mut Pixmap,
+    samples: &std::collections::VecDeque<u64>,
+    scale: u64,
+    color: Color,
+    dashed: bool,
+) {
+    let mut path = PathBuilder::new();
+    for (i, value) in samples.iter().enumerate() {
+        let x = 188. - (samples.len() - 1 - i) as f32 * (176. / 59.);
+        let y = 73. - (*value as f64 / scale.max(1) as f64).min(1.0) as f32 * 22.;
+        if i == 0 || (dashed && i % 4 == 0) {
+            path.move_to(x, y);
+        } else {
+            path.line_to(x, y);
+        }
+        rect(canvas, x - 1., y - 1., 2., 2., color);
+    }
+    if let Some(path) = path.finish() {
+        canvas.stroke_path(
+            &path,
+            &paint(color),
+            &Stroke {
+                width: 1.5,
+                ..Default::default()
+            },
+            Transform::identity(),
+            None,
+        );
     }
 }
 

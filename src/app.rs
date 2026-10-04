@@ -22,8 +22,9 @@ pub struct App {
     snapshot: Mutex<Snapshot>,
     surfaces: Mutex<HashMap<String, Surface>>,
     gates: Mutex<HashMap<Action, Gate>>,
-    audio_locks: [Mutex<()>; 2],
+    audio: crate::audio::Audio,
     audio_pending: Mutex<HashMap<Action, AudioPending>>,
+    power_lock: Mutex<()>,
     notify: Notify,
 }
 struct Surface {
@@ -54,8 +55,9 @@ impl App {
             snapshot: Mutex::new(Snapshot::unavailable()),
             surfaces: Mutex::new(HashMap::new()),
             gates: Mutex::new(HashMap::new()),
-            audio_locks: [Mutex::new(()), Mutex::new(())],
+            audio: crate::audio::Audio::new(),
             audio_pending: Mutex::new(HashMap::new()),
+            power_lock: Mutex::new(()),
             notify: Notify::new(),
         })
     }
@@ -109,6 +111,13 @@ impl App {
         }
         self.spawn(|app| async move { app.audio_events().await });
         self.spawn(|app| async move { app.hypr_events().await });
+        self.spawn(|app| async move { app.stats_loop().await });
+        self.spawn(|app| async move {
+            loop {
+                app.refresh_power().await;
+                sleep(Duration::from_secs(2)).await;
+            }
+        });
     }
 
     fn spawn<F, Fut>(self: &Arc<Self>, task: F)
@@ -120,6 +129,30 @@ impl App {
     }
 
     // ---- polling -------------------------------------------------------
+
+    async fn stats_loop(&self) {
+        let mut sampler = crate::metrics::Sampler::default();
+        let mut cadence = tokio::time::interval(Duration::from_secs(1));
+        cadence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            cadence.tick().await;
+            let samples = sampler.sample().await;
+            {
+                let mut snapshot = self.snapshot.lock().await;
+                for (action, result) in samples {
+                    let target = snapshot.content_mut(action).unwrap();
+                    match result {
+                        Ok(graph) => {
+                            target.graph = Some(graph);
+                            target.stale = false;
+                        }
+                        Err(error) => flag_stale(target, action.name(), &error),
+                    }
+                }
+            }
+            self.notify.notify_one();
+        }
+    }
 
     async fn poll_loop(&self, action: Action) {
         let mut theme = ThemeWatch::new();
@@ -173,12 +206,6 @@ impl App {
     // ---- refresh -------------------------------------------------------
 
     async fn refresh(&self, action: Action) {
-        // Serialize reads with audio writes to prevent older snapshots overwriting
-        // a just-completed adjustment.
-        let _audio_guard = match audio_lane(action) {
-            Some(lane) => Some(self.audio_locks[lane].lock().await),
-            None => None,
-        };
         if action == Action::Theme {
             self.refresh_theme().await;
         } else if !self.refresh_content(action).await {
@@ -216,8 +243,6 @@ impl App {
 
     async fn query_state(&self, action: Action) -> Option<anyhow::Result<Content>> {
         Some(match action {
-            Action::Volume => state::audio(&self.runner, false).await,
-            Action::Mic => state::audio(&self.runner, true).await,
             Action::Workspace => state::workspace(&self.runner).await,
             Action::Night => state::night(&self.runner).await,
             Action::Record => state::record(&self.runner).await,
@@ -276,15 +301,98 @@ impl App {
 
     // ---- input ---------------------------------------------------------
 
+    /// OpenDeck's native profile switch, while screen taps keep the panel action.
+    pub async fn dial_click(self: &Arc<Self>, action: Action, instance: &openaction::Instance) {
+        let target = match action {
+            Action::Theme => "performance",
+            Action::Network => "default",
+            _ => {
+                self.input(action, instance.instance_id.clone(), None).await;
+                return;
+            }
+        };
+        let path = self
+            .runner
+            .home
+            .join(".config/opendeck/profiles")
+            .join(&instance.device_id)
+            .join(format!("{target}.json"));
+        match tokio::fs::try_exists(path).await {
+            Ok(true) => {}
+            _ => {
+                self.failure(
+                    &instance.instance_id,
+                    format!("profile {target} is unavailable"),
+                )
+                .await;
+                return;
+            }
+        }
+        if let Err(error) = openaction::send_arbitrary_json(serde_json::json!({
+            "event": "switchProfile", "device": instance.device_id, "profile": target,
+        }))
+        .await
+        {
+            self.failure(&instance.instance_id, error).await;
+        }
+    }
+
+    async fn refresh_power(&self) {
+        let _guard = self.power_lock.lock().await;
+        self.store_power(crate::power::Profiles::read(&self.runner).await)
+            .await;
+    }
+
+    async fn store_power(&self, result: anyhow::Result<crate::power::Profiles>) {
+        let mut snapshot = self.snapshot.lock().await;
+        let cpu = snapshot.content_mut(Action::Cpu).unwrap();
+        match result {
+            Ok(profiles) => {
+                cpu.power_profile = profiles.label();
+                cpu.power_stale = false;
+            }
+            Err(error) => {
+                if !cpu.power_stale {
+                    eprintln!("power profile stale: {error:#}");
+                }
+                cpu.power_stale = true;
+            }
+        }
+        self.notify.notify_one();
+    }
+
+    async fn cycle_power(&self, ticks: i16, id: &str) {
+        let _guard = self.power_lock.lock().await;
+        let result = crate::power::Profiles::cycle(&self.runner, ticks).await;
+        if let Err(error) = &result {
+            self.failure(id, error).await;
+        }
+        self.store_power(result).await;
+        self.next_pending(Action::Cpu).await;
+    }
+
     pub async fn input(self: &Arc<Self>, action: Action, id: String, ticks: Option<i16>) {
         if ticks == Some(0) {
+            return;
+        }
+        if action == Action::Cpu {
+            if let Some(ticks) = ticks
+                && self.claim_gate(action, Some(ticks), &id).await
+            {
+                self.spawn(move |app| async move { app.cycle_power(ticks, &id).await });
+            }
+            return;
+        }
+        if matches!(action, Action::Memory | Action::Disk)
+            || (action == Action::Network && ticks.is_some())
+        {
             return;
         }
         if audio_lane(action).is_some() {
             self.queue_audio(action, id, ticks).await;
             return;
         }
-        let gated = matches!(action, Action::Night | Action::Record)
+        let gated = matches!(action, Action::Night | Action::Record | Action::Network)
             || (ticks.is_some() && matches!(action, Action::Workspace | Action::Theme));
         if gated && !self.claim_gate(action, ticks, &id).await {
             return;
@@ -403,93 +511,37 @@ impl App {
         if ticks == Some(0) {
             return;
         }
-        let source = action == Action::Mic;
-        let _guard = self.audio_locks[usize::from(source)].lock().await;
-        let result = self.apply_audio(source, ticks).await;
-        let failure = {
-            let mut s = self.snapshot.lock().await;
-            let content = if source { &mut s.mic } else { &mut s.volume };
-            match result {
-                Ok(value) => {
-                    *content = value;
-                    None
-                }
-                Err(error) => {
-                    content.stale = true;
-                    Some(error)
-                }
-            }
-        };
-        match failure {
-            Some(error) => self.failure(id, error).await,
-            None => self.notify.notify_one(),
+        if let Err(error) = self.audio.adjust(action == Action::Mic, ticks).await {
+            self.failure(id, error).await;
         }
-    }
-
-    /// Reads the device, applies the volume step or mute toggle, and returns the new content.
-    async fn apply_audio(&self, source: bool, ticks: Option<i64>) -> anyhow::Result<Content> {
-        let target = if source {
-            "@DEFAULT_AUDIO_SOURCE@"
-        } else {
-            "@DEFAULT_AUDIO_SINK@"
-        };
-        let mut content = state::audio(&self.runner, source).await?;
-        if let Some(ticks) = ticks {
-            let value = (content.percent.unwrap() as i64)
-                .saturating_add(ticks)
-                .clamp(0, 100);
-            self.runner
-                .query(&["wpctl", "set-volume", target, &format!("{value}%")])
-                .await?;
-            content.percent = Some(value as u32);
-        } else {
-            self.runner
-                .query(&["wpctl", "set-mute", target, "toggle"])
-                .await?;
-            content.muted = !content.muted;
-        }
-        Ok(content)
     }
 
     // ---- backend event streams -----------------------------------------
 
     async fn audio_events(&self) {
-        let mut delay = 1;
+        let mut updates = self.audio.subscribe();
         loop {
-            let received = self.watch_audio().await;
-            self.mark_stale(&[Action::Volume, Action::Mic]).await;
-            reconnect_pause(&mut delay, received).await;
-        }
-    }
-
-    /// Follows `pactl subscribe` until it ends; returns whether any event arrived.
-    async fn watch_audio(&self) -> bool {
-        let argv = vec!["pactl".into(), "subscribe".into()];
-        let Ok(mut command) = self.runner.command(&argv, false).await else {
-            return false;
-        };
-        command
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-        let Ok(mut child) = command.spawn() else {
-            return false;
-        };
-        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-        let mut received = false;
-        while let Ok(Some(line)) = lines.next_line().await {
-            if ["sink", "source", "server"]
-                .iter()
-                .any(|s| line.contains(s))
+            let state = *updates.borrow_and_update();
             {
-                self.refresh(Action::Volume).await;
-                self.refresh(Action::Mic).await;
+                let mut snapshot = self.snapshot.lock().await;
+                for (action, level) in [(Action::Volume, state.output), (Action::Mic, state.input)]
+                {
+                    let content = snapshot.content_mut(action).unwrap();
+                    match level {
+                        Some(level) => {
+                            content.percent = Some(level.percent);
+                            content.muted = level.muted;
+                            content.stale = false;
+                        }
+                        None => content.stale = true,
+                    }
+                }
             }
-            received = true;
+            self.notify.notify_one();
+            if updates.changed().await.is_err() {
+                return;
+            }
         }
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        received
     }
 
     async fn hypr_events(&self) {
@@ -526,9 +578,7 @@ impl App {
 }
 
 /// Actions whose state is polled in the background.
-const POLLED: [Action; 7] = [
-    Action::Volume,
-    Action::Mic,
+const POLLED: [Action; 5] = [
     Action::Workspace,
     Action::Theme,
     Action::Night,
@@ -536,7 +586,7 @@ const POLLED: [Action; 7] = [
     Action::Lock,
 ];
 
-/// Index of the audio lock/queue lane for an audio action.
+/// Index of the audio queue lane for an audio action.
 fn audio_lane(action: Action) -> Option<usize> {
     match action {
         Action::Volume => Some(0),
@@ -688,6 +738,13 @@ fn command(action: Action, ticks: Option<i16>) -> Vec<String> {
         Action::Theme if ticks.is_some() => vec!["deck-theme-cycle"],
         Action::Workspace => vec!["omarchy-menu"],
         Action::Theme => vec!["omarchy-theme-bg-next"],
+        Action::Network => vec![
+            "omarchy-shell",
+            "shell",
+            "summon",
+            "omarchy.speedtest",
+            "{}",
+        ],
         _ => vec![],
     };
     let mut args = args.into_iter().map(String::from).collect::<Vec<_>>();

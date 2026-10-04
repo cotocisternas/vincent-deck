@@ -8,7 +8,7 @@ different setup.
 
 ## Build and install
 
-Install the desktop-command dependencies listed in the [README](../README.md),
+Install the native audio build/runtime and desktop-command dependencies listed in the [README](../README.md),
 then run:
 
 ```sh
@@ -56,7 +56,11 @@ Review the Terminal tile and Volume panel first, then all controls:
 - Key-down invokes once; key-up is ignored. Agent toggles the scratchpad.
 - Volume/mic rotation applies 1% per tick and clamps writes to 0–100%. Externally
   set above-cap values remain visible; mute does not change their percentage.
-- Dial press and panel tap perform the same action.
+  Audio connects directly through WirePlumber's native mixer API; `wpctl` and
+  `pactl` are not runtime dependencies. External changes and default-device changes
+  update the existing panels through native notifications.
+- Dial press and panel tap perform the same action except Theme/Network clicks,
+  which switch profiles; their taps keep wallpaper/speed-test actions.
 - Workspace shows the focused workspace, occupancy, and active window. Rotation
   retains only the latest pending direction while an invocation runs.
 - Theme changes recolor all surfaces, including grayscale accents in monochrome
@@ -68,6 +72,69 @@ Review the Terminal tile and Volume panel first, then all controls:
 - Rearranged/duplicate instances behave consistently within their controller type.
 
 The known theme-settling and event-query limitations are in [NOTES.md](../NOTES.md).
+
+## System Stats profile
+
+Install the latest plugin, close OpenDeck, and wait for its processes to exit:
+
+```sh
+python scripts/manage.py stats-profile
+opendeck
+```
+
+Select **System Stats** in OpenDeck's profile selector. The option
+`--name performance` creates the same layout as a profile named **performance**:
+
+```sh
+python scripts/manage.py stats-profile --name performance
+```
+
+The command reads either
+`Default.json` or `default.json`, deep-copies the profile, and places CPU, Memory,
+Disk, and Network Stats in the four copied dial slots. All key definitions,
+contexts, settings, unrelated profile fields, and custom key images are retained.
+The original profile and its panels are not written. Existing System Stats
+profiles are not overwritten, including lowercase filenames.
+
+These actions are also available individually in OpenDeck's action list. Their
+UUIDs are `dev.vincent.deck.cpu`, `.memory`, `.disk`, and `.network`; the twelve
+existing UUIDs remain available. The manifest version is `0.2.2`.
+
+The display warms up for one sampling interval, then updates once per second:
+
+- CPU is aggregate busy time excluding idle/iowait, with guest time counted once.
+  Its footer shows the current power profile, refreshed every two seconds and
+  after a change. Turning the dial cycles available profiles in either direction,
+  wrapping at the ends; one signed step per event. Changes use Omarchy's
+  `autodetect` policy to remember the selection for the current power source.
+  Repeats drop while a change runs. `POWER?` means the profile cannot be confirmed;
+  it does not mark valid CPU utilization data stale.
+- Memory uses `MemTotal − MemAvailable`, rather than counting reclaimable cache
+  as unavailable RAM.
+- Disk shows I/O throughput across physical whole disks; it is not filesystem
+  capacity. Partitions, device-mapper volumes, loop devices, and zram are excluded
+  to avoid counting the same I/O twice.
+- Network shows traffic across physical NICs, excluding loopback, bridges, veth,
+  and other virtual interfaces. It measures traffic, not connection speed.
+- Disk and network auto-scale both traces to their largest recent value, with a
+  minimum scale of 1 KiB/s. Rates use actual elapsed monotonic time.
+- Histories retain at most 60 samples. Solid accent means read/download; dashed
+  foreground means write/upload. New/reset devices do not create rate spikes.
+- Missing data is marked stale; last-known history is dimmed until recovery.
+- Network panel tap opens the Omarchy speed-test overlay using
+  `omarchy-shell shell summon omarchy.speedtest {}`. The overlay manages download
+  and upload phases and stops traffic when dismissed. Rotation remains inert.
+- Memory/Disk remain read-only; CPU press/tap is inert.
+
+For the two-page toggle, create the stats profile with `--name performance`.
+Click Theme's dial on `default` to switch to `performance`; click Network's dial
+to return to `default`. Screen taps still change wallpaper or open the speed test.
+The plugin sends the same native `switchProfile` event as OpenDeck's built-in
+Switch Profile action, using the originating device. It reports a brief `ERROR`
+if the target profile file does not exist. No key is repurposed for navigation.
+Stock OpenDeck 2.14.0 only allows built-in plugins to send this message; install
+the [host permission patch](opendeck-host-patch.md) for the combined dial toggle.
+The profile selector remains available for other pages, including System Stats.
 
 ## Migrate Default
 

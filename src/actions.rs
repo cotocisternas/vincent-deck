@@ -43,20 +43,23 @@ macro_rules! action {
                 _: &Self::Settings,
             ) -> OpenActionResult<()> {
                 if Kind::$kind.panel() && instance.controller == "Encoder" {
-                    self.0
-                        .input(Kind::$kind, instance.instance_id.clone(), None)
-                        .await;
+                    self.0.dial_click(Kind::$kind, instance).await;
                 }
                 Ok(())
             }
             async fn touch_tap(
                 &self,
                 instance: &Instance,
-                settings: &Self::Settings,
+                _: &Self::Settings,
                 _: (u16, u16),
                 _: bool,
             ) -> OpenActionResult<()> {
-                self.dial_down(instance, settings).await
+                if Kind::$kind.panel() && instance.controller == "Encoder" {
+                    self.0
+                        .input(Kind::$kind, instance.instance_id.clone(), None)
+                        .await;
+                }
+                Ok(())
             }
             async fn dial_rotate(
                 &self,
@@ -87,13 +90,17 @@ action!(Volume, Volume, "volume");
 action!(Mic, Mic, "mic");
 action!(Workspace, Workspace, "workspace");
 action!(Theme, Theme, "theme");
+action!(Cpu, Cpu, "cpu");
+action!(Memory, Memory, "memory");
+action!(Disk, Disk, "disk");
+action!(Network, Network, "network");
 
 pub async fn register(app: Arc<App>) {
     openaction::global_events::set_global_event_handler(Box::leak(Box::new(Global(app.clone()))));
     macro_rules! register { ($($type:ident),*) => { $(openaction::register_action($type(app.clone())).await;)* }; }
     register!(
         Terminal, Browser, Screenshot, Record, Agent, Clipboard, Night, Lock, Volume, Mic,
-        Workspace, Theme
+        Workspace, Theme, Cpu, Memory, Disk, Network
     );
 }
 

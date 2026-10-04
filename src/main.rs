@@ -19,6 +19,10 @@ async fn main() -> Result<()> {
                 window: "firefox: GitHub".into(),
                 theme: "Rose Pine".into(),
                 position: "7/25".into(),
+                power_profile: "BALANCED".into(),
+                graph: action
+                    .stats()
+                    .then(|| vincent_deck::metrics::Graph::preview(action)),
                 ..Default::default()
             };
             let png = renderer.render(action, &palette, &content)?;

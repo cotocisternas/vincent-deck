@@ -15,6 +15,7 @@ pub struct Snapshot {
     pub night: Content,
     pub record: Content,
     pub lock: Content,
+    pub stats: [Content; 4],
 }
 
 impl Snapshot {
@@ -31,6 +32,10 @@ impl Snapshot {
             night: stale.clone(),
             record: stale.clone(),
             lock: stale,
+            stats: std::array::from_fn(|_| Content {
+                stale: true,
+                ..Default::default()
+            }),
             ..Default::default()
         }
     }
@@ -45,6 +50,10 @@ impl Snapshot {
             Action::Night => &self.night,
             Action::Record => &self.record,
             Action::Lock => &self.lock,
+            Action::Cpu => &self.stats[0],
+            Action::Memory => &self.stats[1],
+            Action::Disk => &self.stats[2],
+            Action::Network => &self.stats[3],
             _ => return None,
         })
     }
@@ -58,31 +67,13 @@ impl Snapshot {
             Action::Night => &mut self.night,
             Action::Record => &mut self.record,
             Action::Lock => &mut self.lock,
+            Action::Cpu => &mut self.stats[0],
+            Action::Memory => &mut self.stats[1],
+            Action::Disk => &mut self.stats[2],
+            Action::Network => &mut self.stats[3],
             _ => return None,
         })
     }
-}
-
-pub async fn audio(runner: &Runner, source: bool) -> Result<Content> {
-    let target = if source {
-        "@DEFAULT_AUDIO_SOURCE@"
-    } else {
-        "@DEFAULT_AUDIO_SINK@"
-    };
-    let output = runner.query(&["wpctl", "get-volume", target]).await?;
-    let mut words = output.split_whitespace();
-    if words.next() != Some("Volume:") {
-        bail!("invalid wpctl volume {output:?}")
-    }
-    let value: f64 = words.next().context("missing volume")?.parse()?;
-    if !value.is_finite() || value < 0.0 || value > u32::MAX as f64 / 100.0 {
-        bail!("invalid volume")
-    }
-    Ok(Content {
-        percent: Some((value * 100.0).round() as u32),
-        muted: words.any(|s| s == "[MUTED]"),
-        ..Default::default()
-    })
 }
 
 pub async fn workspace(runner: &Runner) -> Result<Content> {

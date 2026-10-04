@@ -102,3 +102,55 @@ fn palette_requires_every_contract_color_and_preserves_grayscale() {
     assert_eq!(Palette::parse(&text).unwrap(), palette);
     assert!(Palette::parse("bg\t#ffffff").is_err());
 }
+
+#[test]
+fn stats_graphs_change_with_history_and_follow_the_palette() {
+    use vincent_deck::metrics::{ACTIONS, Graph};
+    let renderer = Renderer::new().unwrap();
+    let palette = Palette::default();
+    for action in ACTIONS {
+        let mut content = Content {
+            graph: Some(Graph::preview(action)),
+            ..Default::default()
+        };
+        let original = renderer.render(action, &palette, &content).unwrap();
+        content.graph.as_mut().unwrap().primary[30] = 0;
+        let changed = renderer.render(action, &palette, &content).unwrap();
+        assert_ne!(
+            original,
+            changed,
+            "history must affect {} graph",
+            action.name()
+        );
+        let mut tinted = palette.clone();
+        for name in vincent_deck::render::ACCENTS {
+            tinted.0.insert(name.into(), [100, 180, 220]);
+        }
+        assert_ne!(changed, renderer.render(action, &tinted, &content).unwrap());
+        content.stale = true;
+        assert_ne!(
+            changed,
+            renderer.render(action, &palette, &content).unwrap()
+        );
+    }
+}
+
+#[test]
+fn cpu_power_profile_and_unavailability_are_visible() {
+    let renderer = Renderer::new().unwrap();
+    let palette = Palette::default();
+    let mut content = Content {
+        graph: Some(vincent_deck::metrics::Graph::preview(Action::Cpu)),
+        power_profile: "BALANCED".into(),
+        ..Default::default()
+    };
+    let balanced = renderer.render(Action::Cpu, &palette, &content).unwrap();
+    content.power_profile = "PERFORMANCE".into();
+    let performance = renderer.render(Action::Cpu, &palette, &content).unwrap();
+    assert_ne!(balanced, performance);
+    content.power_stale = true;
+    assert_ne!(
+        performance,
+        renderer.render(Action::Cpu, &palette, &content).unwrap()
+    );
+}

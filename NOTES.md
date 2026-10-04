@@ -43,7 +43,11 @@ rollback, and hardware acceptance checks.
 | `src/main.rs` | Sample rendering and the host reconnect loop |
 | `src/actions.rs` | OpenAction registration and controller event routing |
 | `src/app.rs` | Shared state, polling, rendering, input queues/gates, event streams |
+| `src/audio/mod.rs` | Native audio thread, command channel, latest-state notifications, reconnect |
+| `src/audio/native.c` | Small WirePlumber 0.5 library bridge, mixer/default-node APIs |
 | `src/state.rs` | Desktop queries, parsing, and snapshot accessors |
+| `src/metrics.rs` | Read-only Linux sampling, counter deltas, bounded graph histories |
+| `src/power.rs` | Available power-profile parsing and directional cycling |
 | `src/process.rs` | Command environment, sessions, query timeout/output limits |
 | `src/render.rs` | Action styles, palettes, elapsed text, font rasterization, PNG drawing |
 | `scripts/manage.py` | Build/install, manifest generation, profile migration, rollback |
@@ -55,6 +59,69 @@ owns the bounded image cache. Snapshot accessors centralize field selection.
 Content is still a common struct containing fields for all actions; action policy
 dispatch remains in several matches.
 
+## System statistics
+
+Four additive Encoder-only actions (`cpu`, `memory`, `disk`, `network`) are
+registered alongside the original twelve. One shared one-second sampler reads
+`/proc/stat`, `meminfo`, `diskstats`, and `net/dev`; `/sys/block/*/device` and
+`/sys/class/net/*/device` identify physical devices. No monitoring processes are
+launched for telemetry. A skipped-tick interval avoids catch-up bursts. Sampling continues while
+the plugin runs so a newly shown stats panel has recent history.
+
+CPU/memory use a fixed 0–100% graph scale; disk/network use a shared rolling peak
+scale for both series. Histories contain at most 60 values per series and are
+part of visible render-cache keys. Source failures retain dimmed history and
+reset counter baselines before recovery. Read/write and download/upload are
+distinguished by solid accent and dashed foreground traces even in monochrome.
+
+`stats-profile` copies Default's keys and custom images into a separate System
+Stats profile, assigning only its copied dial slots. It never edits Default and
+rejects overwriting existing stats profiles. `--name performance` names the copied
+profile performance. Default filename casing is detected for profile commands and
+legacy archives. The manifest version is now `0.2.2`.
+
+CPU's footer independently tracks the active power profile every two seconds.
+Rotation reads the available profiles and selects one signed step with
+`omarchy-powerprofiles-set autodetect <profile>`, then confirms the active mode.
+A shared lock serializes polling and writes; an action-wide gate drops repeat
+rotations while busy. Missing profile information shows `POWER?` without hiding
+valid utilization. CPU click/tap and Memory/Disk input remain inert.
+
+Network screen-tap asynchronously summons Omarchy's `omarchy.speedtest` overlay.
+The shell owns its download/upload phases and cancellation. A gate prevents
+overlapping launch commands; network rotation is inert. Launch failures render
+`ERROR` on the originating panel.
+
+Theme and Network dial-down events now send OpenDeck's native `switchProfile`
+message for the originating device: Theme targets `performance`, Network targets
+`default`. Target profile files must exist. Screen taps are routed independently
+to the original wallpaper/speed-test actions; dial-up does not switch a second
+time. Other dial behavior is unchanged. The host harness verifies both switch
+messages and that clicking does not additionally run a tap command.
+
+Real-host testing revealed stock OpenDeck 2.14.0 silently rejects that message
+from Vincent Deck. The owner-approved host allowlist patch is documented in
+[docs/opendeck-host-patch.md](docs/opendeck-host-patch.md). The opt-in live test
+reproduced the failed selection change on stock OpenDeck and passed in both
+directions on the patched build. Mock-host message assertions alone missed this.
+
+## Native audio
+
+Audio uses one persistent PipeWire connection through WirePlumber 0.5's native
+`default-nodes-api` and `mixer-api` modules. A dedicated GLib thread owns all native
+objects. The small C bridge keeps GObject signals and native ownership out of the
+Rust application; Cargo compiles it and links the system library. No `wpctl` or
+`pactl` process is launched for audio, and audio is no longer polled.
+
+The mixer uses the same cubic scale and hardware Route/software Props handling
+as `wpctl`. Rotations still apply whole 1% ticks, clamped to 0–100%; observation
+and mute retain externally set above-cap levels. Writes are serialized on the
+audio thread, with native synchronization before the next write. Default changes,
+node removal, volume/mute changes, and disconnects publish latest-state updates
+through a deduplicated Tokio watch channel. Missing devices retain dimmed last-known
+display values. Failed inputs are consumed; reconnect rediscovers the audio session
+without replaying them. Renderer, action IDs, profiles, and input routing are unchanged.
+
 ## Runtime limits
 
 - State-query timeout: 2 seconds; captured query stdout capped at 256 KiB.
@@ -65,8 +132,10 @@ dispatch remains in several matches.
   contain formatted visible elapsed time only.
 - Panel send limit: 100 ms minimum per context (at most 10 Hz); fixed-cadence
   refresh prevents sustained event streams starving display updates.
-- Audio: pactl events plus 500 ms reconciliation; tick batches are summed behind
-  one worker per source. Absolute percentage writes implement the above-cap clamp.
+- Audio: native notifications; tick batches are summed behind one worker per source.
+  The native command queue is bounded to 32 requests. Startup and write synchronization
+  have two-second deadlines; failed connections retry after 500 ms. Absolute percentage
+  writes implement the above-cap clamp.
 - Workspace: socket2 events plus 2-second reconciliation, rediscovery after socket
   replacement; one running movement and latest pending direction only.
 - Theme: replacement-safe path polling every 250–500 ms with 400 ms settling;
@@ -86,10 +155,25 @@ Passed: Rust typecheck, strict Clippy, rendered-output tests (dimensions, opacit
 strict grayscale, stale/failure distinctions, recording duration formatting),
 real-binary WebSocket host harness (registration, duplicates, keyDown-only launch,
 audio above-cap adjustment, shared Night gates, Workspace coalescing, Theme busy
-drop, panel tap, missing-tool recovery/no replay, reconnect restoration).
+drop, panel tap, private audio-daemon recovery/no replay, host reconnect restoration).
+Native audio integration tests use a private PipeWire daemon and independent CLI
+observers to verify output/input volume and mute, repeated adjustments, above-cap
+observation, external changes, default-device changes, unavailable defaults, and
+daemon restart without replay. Tests never change the desktop audio session.
 Migration/archive tests exercise isolated files, including deletion and permission
 restoration. `cargo test` and `python -m unittest discover -s tests -p 'test_*.py'`
 re-run the checks.
+
+Stats checks cover CPU accounting, memory availability, disk-sector conversion,
+elapsed-time throughput, reset/new-device handling, history bounds, physical
+device filtering, missing-source recovery, grayscale/themed graphs, and live CPU
+history updates through the real-binary host harness. Profile tests confirm the
+original keys/panels and Default file are preserved, custom images are copied,
+and existing System Stats profiles are not overwritten. Power tests cover
+available-profile order, signed stepping, wrapping, invalid state, displayed
+profile names, and unavailable indication. The real host harness uses isolated
+fixtures for profile changes and speed-test launch, so checks do not change the
+desktop power mode or generate speed-test traffic.
 
 Basic appearance, live installation/registration, and Default migration have been
 confirmed. Not yet fully verified: all twelve live controls, dark/light/monochrome
@@ -108,8 +192,8 @@ A killed/crashed plugin requires restarting OpenDeck.
 2. **Host retry delay does not reset.** `main` sleeps 1, 2, 4, 8, then 10 seconds
    after successive disconnects, even if connections were healthy between them.
    This delays restoration; source inspection does not prove the hardware blanks.
-3. **Event queries are not burst-coalesced.** Every Hyprland socket line triggers
-   three workspace queries; every matching pactl line triggers two audio queries.
+3. **Workspace event queries are not burst-coalesced.** Every Hyprland socket line triggers
+    three workspace queries. Audio now uses native notifications instead of CLI queries.
    Refresh batches are awaited serially on each watcher, while the 100 ms cadence
    limits rendering/sends rather than backend queries.
 

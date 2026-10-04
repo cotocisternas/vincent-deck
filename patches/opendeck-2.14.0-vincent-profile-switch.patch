@@ -1,0 +1,43 @@
+diff --git a/src-tauri/src/events/inbound/mod.rs b/src-tauri/src/events/inbound/mod.rs
+--- a/src-tauri/src/events/inbound/mod.rs
++++ b/src-tauri/src/events/inbound/mod.rs
+@@ -70,6 +70,10 @@ pub enum InboundEventType {
+ 	DeviceBrightness(misc::DeviceBrightnessEvent),
+ }
+ 
++fn allows_profile_switch(uuid: &str) -> bool {
++	matches!(uuid, "com.amansprojects.starterpack.sdPlugin" | "opendeck_alternative_elgato_implementation" | "dev.vincent.deck.sdPlugin")
++}
++
+ pub async fn process_incoming_message(data: Result<Message, Error>, uuid: &str, skip_auth: bool) {
+ 	if let Ok(Message::Text(text)) = data {
+ 		let decoded: InboundEventType = match serde_json::from_str(&text) {
+@@ -111,7 +115,9 @@ pub async fn process_incoming_message(data: Result<Message, Error>, uuid: &str,
+ 				if event.context != uuid {
+ 					return;
+ 				}
+-			} else if matches!(decoded, InboundEventType::SwitchProfile(_) | InboundEventType::DeviceBrightness(_))
++			} else if matches!(decoded, InboundEventType::SwitchProfile(_)) && !allows_profile_switch(uuid) {
++				return;
++			} else if matches!(decoded, InboundEventType::DeviceBrightness(_))
+ 				&& uuid != "com.amansprojects.starterpack.sdPlugin"
+ 				&& uuid != "opendeck_alternative_elgato_implementation"
+ 			{
+@@ -153,6 +159,17 @@ pub async fn process_incoming_message(data: Result<Message, Error>, uuid: &str,
+ 	}
+ }
+ 
++#[cfg(test)]
++mod profile_switch_tests {
++	#[test]
++	fn vincent_deck_profile_switch_is_allowed() {
++		assert!(super::allows_profile_switch("dev.vincent.deck.sdPlugin"));
++		assert!(super::allows_profile_switch("com.amansprojects.starterpack.sdPlugin"));
++		assert!(super::allows_profile_switch("opendeck_alternative_elgato_implementation"));
++		assert!(!super::allows_profile_switch("unrelated.sdPlugin"));
++	}
++}
++
+ pub async fn process_incoming_message_pi(data: Result<Message, Error>, uuid: &str) {
+ 	if let Ok(Message::Text(text)) = data {
+ 		let decoded: InboundEventType = match serde_json::from_str(&text) {
