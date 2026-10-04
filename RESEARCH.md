@@ -8,6 +8,10 @@ original numbered briefs are historical; those files are no longer in this
 checkout. Proposed interfaces and timing targets are not claims that every part
 is implemented or verified.
 
+Font packaging update: the implementation now embeds the unchanged Terminess
+Nerd Font Mono Bold from `assets/fonts/` at compile time. System font-path
+references below are historical and are not runtime requirements.
+
 Research date: 2026-10-03.
 Target host: OpenDeck 2.14.0 on Arch/Omarchy (Hyprland, Wayland), Elgato Stream Deck + (`sd-EL31L1A08599`).
 This document is the design brief for a single native Rust plugin that replaces the current mix of Starter Pack “run command” keys and the installed PipeWire volume/mic dials, while keeping the CRT tile look from `~/.local/bin/deck-icons`.

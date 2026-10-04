@@ -1,5 +1,5 @@
 use anyhow::Result;
-use vincent_deck::render::{Action, Content, FONT_PATH, Palette, Renderer};
+use vincent_deck::render::{Action, Content, Palette, Renderer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -7,7 +7,7 @@ async fn main() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("--render-samples") {
         let output = args.get(2).expect("output directory required");
         std::fs::create_dir_all(output)?;
-        let renderer = Renderer::new(std::path::Path::new(FONT_PATH))?;
+        let renderer = Renderer::new()?;
         let palette = std::process::Command::new("omarchy-theme-color")
             .arg("--all")
             .output()?;
@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
             "missing {flag}"
         );
     }
-    let renderer = Renderer::new(std::path::Path::new(FONT_PATH))?;
+    let renderer = Renderer::new()?;
     let app = vincent_deck::app::App::new(renderer);
     vincent_deck::actions::register(app.clone()).await;
     app.start();

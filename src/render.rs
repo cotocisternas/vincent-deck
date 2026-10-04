@@ -4,7 +4,7 @@ use fontdue::{Font, FontSettings};
 use std::collections::BTreeMap;
 use tiny_skia::*;
 
-pub const FONT_PATH: &str = "/usr/share/fonts/TTF/TerminessNerdFontMono-Bold.ttf";
+const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/TerminessNerdFontMono-Bold.ttf");
 pub const ACCENTS: [&str; 8] = [
     "red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta",
 ];
@@ -162,9 +162,10 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(path: &std::path::Path) -> Result<Self> {
-        let bytes = std::fs::read(path).with_context(|| format!("read font {}", path.display()))?;
-        let font = Font::from_bytes(bytes, FontSettings::default()).map_err(anyhow::Error::msg)?;
+    /// Loads the bundled font embedded in the executable; no filesystem lookup.
+    pub fn new() -> Result<Self> {
+        let font =
+            Font::from_bytes(FONT_BYTES, FontSettings::default()).map_err(anyhow::Error::msg)?;
         for glyph in Action::ALL
             .into_iter()
             .map(|a| a.style().2)

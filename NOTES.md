@@ -16,11 +16,13 @@ the Night-like filled/inverted treatment with `LOCKED`; pending acquisition show
 
 ## Build and install
 
-Rust 2024, OpenAction 2.7.0, Tokio, tiny-skia and fontdue. The renderer reads
-Terminess directly from
-`/usr/share/fonts/TTF/TerminessNerdFontMono-Bold.ttf`, including muted glyphs.
-The installed binary is self-contained apart from that font and the documented
-desktop commands. Python 3 is used only by installation/migration tooling.
+Rust 2024, OpenAction 2.7.0, Tokio, tiny-skia and fontdue. The renderer embeds
+`assets/fonts/TerminessNerdFontMono-Bold.ttf` using `include_bytes!`, including
+muted glyphs. It parses the embedded bytes without a filesystem/fontconfig lookup.
+Font provenance and SIL OFL 1.1 notices are in `assets/fonts/`; installation copies
+them into the bundle along with the assets. The binary needs no external font.
+Python 3 is used only by installation/migration tooling; desktop commands remain
+runtime dependencies.
 
 ```sh
 python scripts/manage.py install
@@ -93,7 +95,7 @@ Basic appearance, live installation/registration, and Default migration have bee
 confirmed. Not yet fully verified: all twelve live controls, dark/light/monochrome
 hardware acceptance, real backend restarts, idle CPU, observed render latency,
 and complete cleanup/rollback on the live desktop.
-The font is required at startup; a missing font currently prevents startup.
+Renderer startup validates the embedded font's required action and mute glyphs.
 A killed/crashed plugin requires restarting OpenDeck.
 
 ## Confirmed limitations from source review

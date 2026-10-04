@@ -42,7 +42,6 @@ Night and Record each share a busy gate across their duplicate instances.
 
 - Linux x86-64, OpenDeck, Omarchy, and Hyprland in a working Wayland session.
 - Rust/Cargo with Rust 2024 support and Python 3 for install/migration tooling.
-- Font: `/usr/share/fonts/TTF/TerminessNerdFontMono-Bold.ttf`.
 - Desktop commands: `wpctl`, `pactl`, `hyprctl`, `pgrep`, `ps`, and the Omarchy
   launch, capture, clipboard, nightlight, lock, theme, and menu commands.
 - Existing `~/.local/bin/deck-workspace` and `deck-theme-cycle` helpers. This
@@ -50,6 +49,11 @@ Night and Record each share a busy gate across their duplicate instances.
 
 Migration tooling targets device `sd-EL31L1A08599`, eight keys, four dials, and its
 `Default` profile. Other device IDs require adapting `scripts/manage.py`.
+
+Terminess Nerd Font Mono Bold is bundled in `assets/fonts/` and embedded into the
+executable at compile time. Neither the plugin nor the tests require a system font
+installation or a runtime font file. The font retains its SIL OFL 1.1 license;
+see [font provenance and licensing](assets/fonts/README.md).
 
 ## Build and install
 
@@ -86,7 +90,7 @@ cargo test
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-Rust tests require the font above. The host harness runs the real plugin against
+The host harness runs the real plugin against
 a local WebSocket server and isolated desktop-command fixtures. Python tests
 exercise migration and rollback in temporary homes with process calls mocked.
 

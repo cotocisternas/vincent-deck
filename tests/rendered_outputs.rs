@@ -1,8 +1,8 @@
-use vincent_deck::render::{Action, Content, FONT_PATH, Palette, Renderer, elapsed_label};
+use vincent_deck::render::{Action, Content, Palette, Renderer, elapsed_label};
 
 #[test]
 fn opaque_dimensions_monochrome_and_visible_statuses() {
-    let renderer = Renderer::new(std::path::Path::new(FONT_PATH)).unwrap();
+    let renderer = Renderer::new().unwrap();
     let palette = Palette::default();
     for action in Action::ALL {
         let png = renderer
