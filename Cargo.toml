@@ -1,0 +1,22 @@
+[package]
+name = "vincent-deck"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+fontdue = "0.9"
+libc = "0.2"
+openaction = "=2.7.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny-skia = "0.11"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+futures-util = "0.3"
+tempfile = "3"
+tokio-tungstenite = "0.28"
