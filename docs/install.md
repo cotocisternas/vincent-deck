@@ -59,8 +59,9 @@ Review the Terminal tile and Volume panel first, then all controls:
   Audio connects directly through WirePlumber's native mixer API; `wpctl` and
   `pactl` are not runtime dependencies. External changes and default-device changes
   update the existing panels through native notifications.
-- Dial press and panel tap perform the same action except Theme/Network clicks,
-  which switch profiles; their taps keep wallpaper/speed-test actions.
+- Volume click cycles output devices; Mic click cycles input devices. Taps still
+  toggle mute. The compact label shows the actual current device; rotations adjust it.
+  Theme/Network clicks switch profiles; their taps keep wallpaper/speed-test actions.
 - Workspace shows the focused workspace, occupancy, and active window. Rotation
   retains only the latest pending direction while an invocation runs.
 - Theme changes recolor all surfaces, including grayscale accents in monochrome
@@ -98,7 +99,7 @@ profiles are not overwritten, including lowercase filenames.
 
 These actions are also available individually in OpenDeck's action list. Their
 UUIDs are `dev.vincent.deck.cpu`, `.memory`, `.disk`, and `.network`; the twelve
-existing UUIDs remain available. The manifest version is `0.2.2`.
+existing UUIDs remain available. The manifest version is `0.2.3`.
 
 The display warms up for one sampling interval, then updates once per second:
 

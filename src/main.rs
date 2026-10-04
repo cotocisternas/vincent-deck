@@ -15,6 +15,12 @@ async fn main() -> Result<()> {
         for action in Action::ALL {
             let content = Content {
                 percent: Some(42),
+                audio_device: match action {
+                    Action::Volume => "Fosi Audio ZH3",
+                    Action::Mic => "AT2020USB+",
+                    _ => "",
+                }
+                .into(),
                 workspace: Some(3),
                 window: "firefox: GitHub".into(),
                 theme: "Rose Pine".into(),

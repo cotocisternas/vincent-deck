@@ -104,6 +104,77 @@ fn palette_requires_every_contract_color_and_preserves_grayscale() {
 }
 
 #[test]
+fn audio_device_label_is_compact_and_preserves_controls_and_status() {
+    let renderer = Renderer::new().unwrap();
+    let palette = Palette::default();
+    for action in [Action::Volume, Action::Mic] {
+        let content = Content {
+            percent: Some(42),
+            ..Default::default()
+        };
+        let normal =
+            tiny_skia::Pixmap::decode_png(&renderer.render(action, &palette, &content).unwrap())
+                .unwrap();
+        let labeled = Content {
+            audio_device: "Fosi Audio ZH3".into(),
+            ..content.clone()
+        };
+        let pixels =
+            tiny_skia::Pixmap::decode_png(&renderer.render(action, &palette, &labeled).unwrap())
+                .unwrap();
+        let changes: Vec<_> = normal
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(pixels.data().as_chunks::<4>().0)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(index, _)| (index % 200, index / 200))
+            .collect();
+        assert!(!changes.is_empty());
+        assert!(
+            changes
+                .iter()
+                .all(|(x, y)| (72..186).contains(x) && (25..39).contains(y)),
+            "label must not touch icon, percentage, bar, or status"
+        );
+        let long = Content {
+            audio_device: "Very long device name ".repeat(20),
+            ..labeled.clone()
+        };
+        let fitted =
+            tiny_skia::Pixmap::decode_png(&renderer.render(action, &palette, &long).unwrap())
+                .unwrap();
+        for y in 25..39 {
+            for x in 188..200 {
+                assert_eq!(
+                    pixels.pixel(x, y),
+                    fitted.pixel(x, y),
+                    "label must fit inside frame"
+                );
+            }
+        }
+        for (stale, muted, failed) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let status = Content {
+                stale,
+                muted,
+                failed,
+                ..labeled.clone()
+            };
+            assert_ne!(
+                renderer.render(action, &palette, &labeled).unwrap(),
+                renderer.render(action, &palette, &status).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
 fn stats_graphs_change_with_history_and_follow_the_palette() {
     use vincent_deck::metrics::{ACTIONS, Graph};
     let renderer = Renderer::new().unwrap();

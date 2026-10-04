@@ -78,7 +78,7 @@ distinguished by solid accent and dashed foreground traces even in monochrome.
 Stats profile, assigning only its copied dial slots. It never edits Default and
 rejects overwriting existing stats profiles. `--name performance` names the copied
 profile performance. Default filename casing is detected for profile commands and
-legacy archives. The manifest version is now `0.2.2`.
+legacy archives. The manifest version is now `0.2.3`.
 
 CPU's footer independently tracks the active power profile every two seconds.
 Rotation reads the available profiles and selects one signed step with
@@ -120,7 +120,17 @@ audio thread, with native synchronization before the next write. Default changes
 node removal, volume/mute changes, and disconnects publish latest-state updates
 through a deduplicated Tokio watch channel. Missing devices retain dimmed last-known
 display values. Failed inputs are consumed; reconnect rediscovers the audio session
-without replaying them. Renderer, action IDs, profiles, and input routing are unchanged.
+without replaying them.
+
+Volume dial-click cycles output sinks; Mic dial-click cycles input sources, in stable
+node-name order with wrapping. Screen taps still toggle mute, and rotations adjust
+the effective default. Selection writes the configured default through native
+WirePlumber policy and waits up to two seconds for the effective default to confirm.
+A lone device is a no-op; absent devices or unconfirmed selection show `ERROR`.
+Clicks do not change volume or mute on either device. Stream/monitor nodes are excluded
+by exact sink/source media class. A small 11 px nickname/description line identifies
+the selected device above the percentage without covering the icon/bar/status.
+Device strings are bounded to 255 bytes and control characters are sanitized.
 
 ## Runtime limits
 

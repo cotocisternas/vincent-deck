@@ -168,6 +168,7 @@ pub struct Content {
     pub elapsed: String,
     pub percent: Option<u32>,
     pub muted: bool,
+    pub audio_device: String,
     pub workspace: Option<i32>,
     pub occupied: [bool; 10],
     pub window: String,
@@ -424,7 +425,15 @@ impl Renderer {
             );
             match action {
                 Action::Volume | Action::Mic => {
-                    self.text(&mut canvas, label, 20., 72., 18., text_color);
+                    self.text(&mut canvas, label, 16., 72., 7., text_color);
+                    self.text(
+                        &mut canvas,
+                        &self.fit(&content.audio_device, 11., 114.),
+                        11.,
+                        72.,
+                        25.,
+                        muted,
+                    );
                     let number = content
                         .percent
                         .map(|n| format!("{n}%"))

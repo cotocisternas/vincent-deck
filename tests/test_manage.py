@@ -33,6 +33,10 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(definitions['dev.vincent.deck.network']['Encoder']['TriggerDescription']['Touch'], 'Run Omarchy speed test')
         self.assertEqual(definitions['dev.vincent.deck.theme']['Encoder']['TriggerDescription']['Push'], 'Switch to performance profile')
         self.assertEqual(definitions['dev.vincent.deck.theme']['Encoder']['TriggerDescription']['Touch'], 'Next wallpaper')
+        for action, device in [('volume', 'output'), ('mic', 'input')]:
+            triggers = definitions[f'dev.vincent.deck.{action}']['Encoder']['TriggerDescription']
+            self.assertEqual(triggers['Push'], f'Next {device} device')
+            self.assertEqual(triggers['Touch'], 'Toggle mute')
         self.assertEqual([a['UUID'] for a in manage.manifest()['Actions'][:12]],
                          [f'dev.vincent.deck.{name}' for name in manage.NAMES])
 

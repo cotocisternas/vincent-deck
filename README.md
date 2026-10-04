@@ -13,8 +13,8 @@ open. See [implementation notes](NOTES.md) for verification and known limitation
 ## Controls
 
 All actions can be rearranged or duplicated within their supported controller
-type. Keys act on key-down. Dial press and panel tap perform the same action
-except on the rightmost Theme/Network controls, whose clicks switch profiles.
+type. Keys act on key-down. Audio dial clicks select devices; screen taps mute.
+Theme/Network clicks switch profiles; their taps keep wallpaper/speed-test actions.
 
 | Key action | Press | Live display |
 |---|---|---|
@@ -29,8 +29,8 @@ except on the rightmost Theme/Network controls, whose clicks switch profiles.
 
 | Dial action | Rotate | Press / panel tap | Live display |
 |---|---|---|---|
-| Volume | Adjust output by 1% per tick | Toggle output mute | Percentage, bar, mute/stale status |
-| Mic | Adjust input by 1% per tick | Toggle input mute | Percentage, bar, mute/stale status |
+| Volume | Adjust output by 1% per tick | Click: next output device; tap: mute | Small device name, percentage, bar, mute/stale status |
+| Mic | Adjust input by 1% per tick | Click: next input device; tap: mute | Small device name, percentage, bar, mute/stale status |
 | Workspace | Next/previous workspace | Open Omarchy menu | Number, occupancy pips, active window |
 | Theme | Next/previous theme | Click: performance profile; tap: next wallpaper | Theme name, palette swatches, list position |
 
@@ -38,6 +38,12 @@ Audio adjustments clamp to 0–100%; observation and mute do not change external
 set above-cap values. Workspace rotation uses the sign of an event, retaining
 only the latest pending direction. Theme rotation drops repeats while busy.
 Night and Record each share a busy gate across their duplicate instances.
+
+Audio device clicks cycle currently available sinks or sources in stable node-name
+order, wrapping at the end; a single device is a no-op. Selection changes the system's
+configured default through WirePlumber and waits for confirmation. Rotation and mute
+follow the selected device. Device labels prefer a short nickname, then description,
+then node name, and are fitted to a small line above the percentage.
 
 ## System Stats page
 

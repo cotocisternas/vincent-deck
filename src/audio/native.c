@@ -155,6 +155,25 @@ AudioValue vincent_audio_read(Audio *a, int source) {
   return value;
 }
 
+void vincent_audio_label(Audio *a, guint32 id, char *label, size_t capacity) {
+  if (capacity == 0)
+    return;
+  label[0] = '\0';
+  if (!a->nodes || a->failed)
+    return;
+  g_autoptr(WpNode) node = wp_object_manager_lookup(a->nodes, WP_TYPE_NODE,
+      WP_CONSTRAINT_TYPE_G_PROPERTY, "bound-id", "=u", id, NULL);
+  if (!node)
+    return;
+  const char *name = wp_pipewire_object_get_property(WP_PIPEWIRE_OBJECT(node), "node.nick");
+  if (!name || !*name)
+    name = wp_pipewire_object_get_property(WP_PIPEWIRE_OBJECT(node), "node.description");
+  if (!name || !*name)
+    name = wp_pipewire_object_get_property(WP_PIPEWIRE_OBJECT(node), "node.name");
+  if (name)
+    g_strlcpy(label, name, capacity);
+}
+
 typedef struct { gboolean done; gboolean ok; } Sync;
 
 static void synced(GObject *object, GAsyncResult *result, gpointer data) {
@@ -168,6 +187,31 @@ static void synced(GObject *object, GAsyncResult *result, gpointer data) {
 static gboolean expired(gpointer data) {
   g_cancellable_cancel(data);
   return G_SOURCE_REMOVE;
+}
+
+static gboolean synchronize(Audio *a, GCancellable *cancel) {
+  /* The first barrier delivers Props/Route events; the second lets the mixer
+   * complete its own sync and update its cache before another adjustment. */
+  gboolean ok = TRUE;
+  for (int i = 0; i < 2 && ok; i++) {
+    Sync sync = {0};
+    if (!wp_core_sync(a->core, cancel, synced, &sync)) {
+      ok = FALSE;
+      break;
+    }
+    while (!sync.done)
+      g_main_context_iteration(a->context, TRUE);
+    ok = sync.ok && !a->failed;
+  }
+  a->dirty = TRUE;
+  return ok;
+}
+
+static GSource *write_deadline(Audio *a, GCancellable *cancel) {
+  GSource *deadline = g_timeout_source_new(2000);
+  g_source_set_callback(deadline, expired, cancel, NULL);
+  g_source_attach(deadline, a->context);
+  return deadline;
 }
 
 int vincent_audio_write(Audio *a, guint32 id, double volume, int mute) {
@@ -184,22 +228,69 @@ int vincent_audio_write(Audio *a, guint32 id, double volume, int mute) {
   g_signal_emit_by_name(a->mixer, "set-volume", id, dict, &ok);
   if (!ok)
     return FALSE;
-  /* The first barrier delivers Props/Route events; the second lets the mixer
-   * complete its own sync and update its cache before another adjustment. */
   g_autoptr(GCancellable) cancel = g_cancellable_new();
-  GSource *deadline = g_timeout_source_new(2000);
-  g_source_set_callback(deadline, expired, cancel, NULL);
-  g_source_attach(deadline, a->context);
-  for (int i = 0; i < 2 && ok; i++) {
-    Sync sync = {0};
-    if (!wp_core_sync(a->core, cancel, synced, &sync)) {
-      ok = FALSE;
+  GSource *deadline = write_deadline(a, cancel);
+  ok = synchronize(a, cancel);
+  g_source_destroy(deadline);
+  g_source_unref(deadline);
+  return ok;
+}
+
+static gint compare_nodes(gconstpointer first, gconstpointer second) {
+  WpPipewireObject *a = *(WpPipewireObject * const *)first;
+  WpPipewireObject *b = *(WpPipewireObject * const *)second;
+  return g_strcmp0(wp_pipewire_object_get_property(a, "node.name"),
+      wp_pipewire_object_get_property(b, "node.name"));
+}
+
+int vincent_audio_cycle(Audio *a, int source) {
+  if (a->failed || a->pending || !a->defaults || !a->nodes)
+    return FALSE;
+  const char *media_class = source ? "Audio/Source" : "Audio/Sink";
+  g_autoptr(GPtrArray) nodes = g_ptr_array_new_with_free_func(g_object_unref);
+  g_autoptr(WpIterator) iterator = wp_object_manager_new_filtered_iterator(a->nodes,
+      WP_TYPE_NODE, WP_CONSTRAINT_TYPE_PW_PROPERTY, "media.class", "=s", media_class, NULL);
+  GValue value = G_VALUE_INIT;
+  while (wp_iterator_next(iterator, &value)) {
+    WpNode *node = g_value_get_object(&value);
+    const char *name = wp_pipewire_object_get_property(WP_PIPEWIRE_OBJECT(node), "node.name");
+    if (name && *name)
+      g_ptr_array_add(nodes, g_object_ref(node));
+    g_value_unset(&value);
+  }
+  if (nodes->len == 0)
+    return FALSE;
+  g_ptr_array_sort(nodes, compare_nodes);
+  guint32 current = G_MAXUINT32;
+  g_signal_emit_by_name(a->defaults, "get-default-node", media_class, &current);
+  guint next = 0;
+  for (guint i = 0; i < nodes->len; i++) {
+    if (wp_proxy_get_bound_id(WP_PROXY(nodes->pdata[i])) == current) {
+      next = (i + 1) % nodes->len;
       break;
     }
-    while (!sync.done)
-      g_main_context_iteration(a->context, TRUE);
-    ok = sync.ok && !a->failed;
   }
+  WpNode *node = nodes->pdata[next];
+  guint32 target = wp_proxy_get_bound_id(WP_PROXY(node));
+  if (target == current)
+    return TRUE;
+  const char *name = wp_pipewire_object_get_property(WP_PIPEWIRE_OBJECT(node), "node.name");
+  gboolean ok = FALSE;
+  /* Sticky selection: WirePlumber policy applies it to default.audio.* and
+   * existing streams, just as a system default-device selection does. */
+  g_signal_emit_by_name(a->defaults, "set-default-configured-node-name", media_class, name, &ok);
+  if (!ok)
+    return FALSE;
+  g_autoptr(GCancellable) cancel = g_cancellable_new();
+  GSource *deadline = write_deadline(a, cancel);
+  ok = synchronize(a, cancel);
+  while (ok && !a->failed && !g_cancellable_is_cancelled(cancel)) {
+    g_signal_emit_by_name(a->defaults, "get-default-node", media_class, &current);
+    if (current == target)
+      break;
+    g_main_context_iteration(a->context, TRUE);
+  }
+  ok = ok && !a->failed && current == target;
   g_source_destroy(deadline);
   g_source_unref(deadline);
   a->dirty = TRUE;

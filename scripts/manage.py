@@ -49,15 +49,16 @@ def manifest():
             rotate = {'volume': 'Adjust volume', 'mic': 'Adjust microphone',
                       'workspace': 'Switch workspace', 'theme': 'Cycle theme',
                       'cpu': 'Cycle power profile'}.get(name, '')
-            push = {'volume': 'Toggle mute', 'mic': 'Toggle mute',
+            push = {'volume': 'Next output device', 'mic': 'Next input device',
                      'workspace': 'Open menu', 'theme': 'Switch to performance profile',
                      'network': 'Switch to default profile'}.get(name, '')
-            touch = {'theme': 'Next wallpaper', 'network': 'Run Omarchy speed test'}.get(name, push)
+            touch = {'volume': 'Toggle mute', 'mic': 'Toggle mute',
+                     'theme': 'Next wallpaper', 'network': 'Run Omarchy speed test'}.get(name, push)
             action['Encoder'] = {'layout': 'layouts/panel.json',
                                   'TriggerDescription': {'Rotate': rotate, 'Push': push, 'Touch': touch}}
         actions.append(action)
     return dict(Name='Vincent Deck', Description='Theme-following CRT controls for Omarchy',
-                Author='Vincent', Version='0.2.2', Category='Vincent Deck', Icon='icons/terminal',
+                Author='Vincent', Version='0.2.3', Category='Vincent Deck', Icon='icons/terminal',
                 CodePathLin='x86_64-unknown-linux-gnu/bin/vincent-deck',
                 CodePaths={'x86_64-unknown-linux-gnu': 'x86_64-unknown-linux-gnu/bin/vincent-deck'},
                 OS=[{'Platform': 'linux'}], Actions=actions)

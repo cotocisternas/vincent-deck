@@ -9,6 +9,7 @@ use std::{
 pub struct PipeWire {
     pub root: PathBuf,
     pub child: Child,
+    policy: Option<Child>,
 }
 
 impl PipeWire {
@@ -25,9 +26,10 @@ context.modules = [
  { name = libpipewire-module-access args = { access.socket = { vincent-test = "unrestricted" } } }
 ]
 context.objects = [
- { factory = adapter args = { factory.name = support.null-audio-sink node.name = test-output media.class = Audio/Sink audio.position = [ FL FR ] } }
- { factory = adapter args = { factory.name = support.null-audio-sink node.name = test-input media.class = Audio/Source audio.position = [ MONO ] } }
- { factory = adapter args = { factory.name = support.null-audio-sink node.name = alternate-output media.class = Audio/Sink audio.position = [ FL FR ] } }
+ { factory = adapter args = { factory.name = support.null-audio-sink node.name = test-output node.nick = "Test Speakers" media.class = Audio/Sink audio.position = [ FL FR ] } }
+ { factory = adapter args = { factory.name = support.null-audio-sink node.name = test-input node.nick = "Test Mic" media.class = Audio/Source audio.position = [ MONO ] } }
+ { factory = adapter args = { factory.name = support.null-audio-sink node.name = alternate-output node.nick = "Headphones" media.class = Audio/Sink audio.position = [ FL FR ] } }
+ { factory = adapter args = { factory.name = support.null-audio-sink node.name = alternate-input node.nick = "Headset Mic" media.class = Audio/Source audio.position = [ MONO ] } }
  { factory = metadata args = { metadata.name = default metadata.values = [
    { key = default.audio.sink type = "Spa:String:JSON" value = { name = test-output } }
    { key = default.audio.source type = "Spa:String:JSON" value = { name = test-input } }
@@ -52,7 +54,33 @@ context.objects = [
         Self {
             root: root.to_owned(),
             child,
+            policy: None,
         }
+    }
+
+    /// Minimal session-manager policy for the private daemon: apply configured
+    /// defaults to effective defaults. The desktop runs real WirePlumber policy.
+    pub fn start_policy(&mut self) {
+        let script = r#"
+import subprocess,re
+watch=subprocess.Popen(['pw-metadata','-n','default','-m'],stdout=subprocess.PIPE,text=True)
+try:
+ for line in watch.stdout:
+  match=re.search(r"key:'(default.configured.audio.(?:sink|source))' value:'([^']+)'",line)
+  if match:
+   key,value=match.groups()
+   subprocess.run(['pw-metadata','-n','default','0',key.replace('.configured',''),value,'Spa:String:JSON'],stdout=subprocess.DEVNULL,check=True)
+finally:
+ watch.terminate()
+ watch.wait()
+"#;
+        self.policy = Some(
+            self.command("python3")
+                .args(["-u", "-c", script])
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
     }
 
     pub fn command(&self, program: &str) -> Command {
@@ -74,9 +102,37 @@ context.objects = [
         String::from_utf8(result.stdout).unwrap()
     }
 
+    pub fn default_name(&self, key: &str) -> String {
+        let output = self
+            .command("pw-metadata")
+            .args(["-n", "default"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        let line = text
+            .lines()
+            .find(|line| line.contains(&format!("key:'{key}'")))
+            .unwrap();
+        let value = line
+            .split("value:'")
+            .nth(1)
+            .unwrap()
+            .split('\'')
+            .next()
+            .unwrap();
+        serde_json::from_str::<serde_json::Value>(value).unwrap()["name"]
+            .as_str()
+            .unwrap()
+            .into()
+    }
+
     pub fn stop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(mut policy) = self.policy.take() {
+            let _ = policy.wait();
+        }
     }
 }
 

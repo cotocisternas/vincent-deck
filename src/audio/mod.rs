@@ -11,15 +11,22 @@ pub struct Level {
     pub muted: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     pub output: Option<Level>,
     pub input: Option<Level>,
+    pub output_device: String,
+    pub input_device: String,
+}
+
+enum Operation {
+    Adjust(Option<i64>),
+    Cycle,
 }
 
 struct Request {
     source: bool,
-    ticks: Option<i64>,
+    operation: Operation,
     reply: oneshot::Sender<Result<()>>,
 }
 
@@ -64,11 +71,19 @@ impl Audio {
     }
 
     pub async fn adjust(&self, source: bool, ticks: Option<i64>) -> Result<()> {
+        self.request(source, Operation::Adjust(ticks)).await
+    }
+
+    pub async fn cycle_device(&self, source: bool) -> Result<()> {
+        self.request(source, Operation::Cycle).await
+    }
+
+    async fn request(&self, source: bool, operation: Operation) -> Result<()> {
         let (reply, result) = oneshot::channel();
         self.commands
             .try_send(Request {
                 source,
-                ticks,
+                operation,
                 reply,
             })
             .map_err(|error| anyhow!("audio command unavailable: {error}"))?;
@@ -123,6 +138,13 @@ unsafe extern "C" {
     fn vincent_audio_failed(audio: *mut std::ffi::c_void) -> i32;
     fn vincent_audio_dirty(audio: *mut std::ffi::c_void) -> i32;
     fn vincent_audio_read(audio: *mut std::ffi::c_void, source: i32) -> NativeValue;
+    fn vincent_audio_label(
+        audio: *mut std::ffi::c_void,
+        id: u32,
+        label: *mut std::ffi::c_char,
+        capacity: usize,
+    );
+    fn vincent_audio_cycle(audio: *mut std::ffi::c_void, source: i32) -> i32;
     fn vincent_audio_write(audio: *mut std::ffi::c_void, id: u32, volume: f64, mute: i32) -> i32;
     fn vincent_audio_free(audio: *mut std::ffi::c_void);
 }
@@ -146,6 +168,25 @@ impl Session {
     }
     fn read(&self, source: bool) -> NativeValue {
         unsafe { vincent_audio_read(self.0, i32::from(source)) }
+    }
+    fn label(&self, value: NativeValue) -> String {
+        let mut buffer = [0_u8; 256];
+        unsafe {
+            vincent_audio_label(self.0, value.id, buffer.as_mut_ptr().cast(), buffer.len());
+        }
+        let end = buffer.iter().position(|b| *b == 0).unwrap_or(buffer.len());
+        String::from_utf8_lossy(&buffer[..end])
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect()
+    }
+
+    fn cycle(&self, source: bool) -> Result<()> {
+        ensure!(
+            unsafe { vincent_audio_cycle(self.0, i32::from(source)) } != 0,
+            "audio device switch could not be confirmed"
+        );
+        Ok(())
     }
     fn adjust(&self, source: bool, ticks: Option<i64>) -> Result<()> {
         let value = self.read(source);
@@ -174,9 +215,13 @@ fn adjusted_percent(percent: u32, ticks: i64) -> u32 {
 }
 
 fn publish(session: &Session, tx: &watch::Sender<State>) {
+    let output = session.read(false);
+    let input = session.read(true);
     let next = State {
-        output: session.read(false).level(),
-        input: session.read(true).level(),
+        output: output.level(),
+        input: input.level(),
+        output_device: session.label(output),
+        input_device: session.label(input),
     };
     tx.send_if_modified(|state| {
         if *state == next {
@@ -202,7 +247,10 @@ fn run(
                         if request.reply.is_closed() {
                             continue;
                         }
-                        let result = session.adjust(request.source, request.ticks);
+                        let result = match request.operation {
+                            Operation::Adjust(ticks) => session.adjust(request.source, ticks),
+                            Operation::Cycle => session.cycle(request.source),
+                        };
                         publish(&session, &tx);
                         let _ = request.reply.send(result);
                     }

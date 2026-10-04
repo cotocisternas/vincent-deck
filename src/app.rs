@@ -301,8 +301,17 @@ impl App {
 
     // ---- input ---------------------------------------------------------
 
-    /// OpenDeck's native profile switch, while screen taps keep the panel action.
+    /// Dial clicks select audio devices or profiles; screen taps keep panel actions.
     pub async fn dial_click(self: &Arc<Self>, action: Action, instance: &openaction::Instance) {
+        if matches!(action, Action::Volume | Action::Mic) {
+            let id = instance.instance_id.clone();
+            self.spawn(move |app| async move {
+                if let Err(error) = app.audio.cycle_device(action == Action::Mic).await {
+                    app.failure(&id, error).await;
+                }
+            });
+            return;
+        }
         let target = match action {
             Action::Theme => "performance",
             Action::Network => "default",
@@ -521,17 +530,20 @@ impl App {
     async fn audio_events(&self) {
         let mut updates = self.audio.subscribe();
         loop {
-            let state = *updates.borrow_and_update();
+            let state = updates.borrow_and_update().clone();
             {
                 let mut snapshot = self.snapshot.lock().await;
-                for (action, level) in [(Action::Volume, state.output), (Action::Mic, state.input)]
-                {
+                for (action, level, device) in [
+                    (Action::Volume, state.output, state.output_device),
+                    (Action::Mic, state.input, state.input_device),
+                ] {
                     let content = snapshot.content_mut(action).unwrap();
                     match level {
                         Some(level) => {
                             content.percent = Some(level.percent);
                             content.muted = level.muted;
                             content.stale = false;
+                            content.audio_device = device;
                         }
                         None => content.stale = true,
                     }

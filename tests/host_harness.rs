@@ -54,6 +54,7 @@ async fn image(ws: &mut WebSocketStream<TcpStream>, context: &str) -> Value {
 async fn real_plugin_events_commands_duplicates_busy_gates_and_reconnect() {
     let temp = tempfile::tempdir().unwrap();
     let mut audio = common::PipeWire::start(temp.path());
+    audio.start_policy();
     audio.control(&["set-volume", "@DEFAULT_AUDIO_SINK@", "120%"]);
     let bin = temp.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -245,6 +246,44 @@ else:
     assert_eq!(
         audio.control(&["get-volume", "@DEFAULT_AUDIO_SINK@"]),
         "Volume: 1.00\n"
+    );
+    send(&mut ws, "volume", "v", "dialDown", 0).await;
+    send(&mut ws, "volume", "v", "dialUp", 0).await;
+    sleep(Duration::from_millis(250)).await;
+    assert_eq!(audio.default_name("default.audio.sink"), "alternate-output");
+    assert!(
+        !audio
+            .control(&["get-volume", "@DEFAULT_AUDIO_SINK@"])
+            .contains("MUTED"),
+        "dial click must not mute"
+    );
+    send(&mut ws, "volume", "v", "touchTap", 0).await;
+    sleep(Duration::from_millis(250)).await;
+    assert!(
+        audio
+            .control(&["get-volume", "@DEFAULT_AUDIO_SINK@"])
+            .contains("MUTED"),
+        "screen tap must mute"
+    );
+    send(&mut ws, "mic", "mic", "willAppear", 0).await;
+    image(&mut ws, "mic").await;
+    send(&mut ws, "mic", "mic", "dialDown", 0).await;
+    sleep(Duration::from_millis(250)).await;
+    assert_eq!(
+        audio.default_name("default.audio.source"),
+        "alternate-input"
+    );
+    assert!(
+        !audio
+            .control(&["get-volume", "@DEFAULT_AUDIO_SOURCE@"])
+            .contains("MUTED")
+    );
+    send(&mut ws, "mic", "mic", "touchTap", 0).await;
+    sleep(Duration::from_millis(250)).await;
+    assert!(
+        audio
+            .control(&["get-volume", "@DEFAULT_AUDIO_SOURCE@"])
+            .contains("MUTED")
     );
     // Stop the private daemon: the real backend must render stale, remain alive,
     // then recover without replaying a failed adjustment.
